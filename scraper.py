@@ -54,6 +54,29 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def click_first_visible(locator, timeout=15000, description="element"):
+    """
+    Click the first VISIBLE match for a locator, skipping any hidden
+    duplicates. Needed because Angular sometimes leaves a previous
+    section's collapsed submenu in the DOM (hidden, not removed) --
+    e.g. after scraping "Agenda", its "PARIVESH 2.0" link can still be
+    present when we later look for MOM's "PARIVESH 2.0" link. A plain
+    .first() can grab the hidden one and time out trying to click it.
+    """
+    count = locator.count()
+    for i in range(count):
+        candidate = locator.nth(i)
+        try:
+            if candidate.is_visible():
+                candidate.click(timeout=timeout)
+                return
+        except Exception:
+            continue
+    raise RuntimeError(
+        f"No visible match found for {description} ({count} candidate(s) checked)"
+    )
+
+
 def shot(page, name):
     """Save a screenshot for debugging. Always safe to call."""
     SCREENSHOT_DIR.mkdir(exist_ok=True)
@@ -125,15 +148,22 @@ def scrape_section(page, section_label, state_name):
         shot(page, f"{section_label}_{state_name}_00_loaded")
 
         # Open the sidebar section (Agenda or MOM)
-        section_locator = page.get_by_text(section_label, exact=True).first
-        section_locator.click(timeout=15000)
+        section_locator = page.get_by_text(section_label, exact=True)
+        click_first_visible(section_locator, timeout=15000,
+                             description=f"sidebar '{section_label}' link")
         page.wait_for_timeout(1000)
         shot(page, f"{section_label}_{state_name}_01a_submenu_opened")
 
         # The sidebar section expands into a submenu with version links
         # ("PARIVESH 2.0" / "PARIVESH 1.0"). We want the current version.
-        version_link = page.get_by_text("PARIVESH 2.0", exact=True).first
-        version_link.click(timeout=15000)
+        # IMPORTANT: use click_first_visible here, not .first -- a
+        # previously-scraped section's submenu (e.g. Agenda's) can leave
+        # its own "PARIVESH 2.0" link hidden-but-present in the DOM, and
+        # .first was grabbing that instead of the current section's link,
+        # timing out because it's not clickable while hidden.
+        version_link = page.get_by_text("PARIVESH 2.0", exact=True)
+        click_first_visible(version_link, timeout=15000,
+                             description="'PARIVESH 2.0' submenu link")
         page.wait_for_load_state("networkidle", timeout=30000)
         page.wait_for_timeout(1500)
         shot(page, f"{section_label}_{state_name}_01_section_opened")
