@@ -132,101 +132,16 @@ def scrape_section(page, section_label, state_name):
         page.wait_for_timeout(1500)
         shot(page, f"{section_label}_{state_name}_01_section_opened")
 
-        # Try to find a State dropdown/select and choose our state.
-        # Common patterns: a <select>, or an Angular Material mat-select
-        # (a clickable div that opens a floating option panel).
-        #
-        # IMPORTANT: text matching must be an EXACT/whole-string match for
-        # "State" -- a earlier version used a loose substring regex and it
-        # matched "Accessibility Statement" in the site footer instead,
-        # navigating the browser to the wrong page entirely. Never loosen
-        # this back to a substring match.
-        state_set = False
-
-        # Attempt 1: native <select> containing "State" nearby
-        selects = page.locator("select")
-        for i in range(selects.count()):
-            sel = selects.nth(i)
-            try:
-                sel.select_option(label=state_name, timeout=3000)
-                state_set = True
-                log(f"  set state via native <select> #{i}")
-                break
-            except Exception:
-                continue
-
-        # Attempt 2: mat-select style dropdown -- click the label/placeholder
-        # element whose *entire* text is exactly "State" (case-insensitive,
-        # allowing surrounding whitespace only), then click the option text.
-        if not state_set:
-            try:
-                dropdown = page.get_by_text(
-                    re.compile(r"^\s*state\s*$", re.I)
-                ).first
-                dropdown.click(timeout=5000)
-                page.wait_for_timeout(500)
-                option = page.get_by_text(state_name, exact=True).first
-                option.click(timeout=5000)
-                state_set = True
-                log("  set state via mat-select-style dropdown")
-            except Exception as e:
-                log(f"  could not set state dropdown: {e}")
-
-        # Sanity check: log the URL so we can spot in the Actions log if a
-        # stray click ever lands somewhere unexpected again.
-        log(f"  current URL: {page.url}")
-
-        shot(page, f"{section_label}_{state_name}_02_state_selected")
-
-        # Trigger search if there's a Search/Submit button
-        try:
-            search_btn = page.get_by_role(
-                "button", name=re.compile("search|submit|go", re.I)
-            ).first
-            search_btn.click(timeout=5000)
-            page.wait_for_timeout(2000)
-        except Exception:
-            log("  no explicit search button found (may auto-filter)")
-
-        page.wait_for_load_state("networkidle", timeout=20000)
-        shot(page, f"{section_label}_{state_name}_03_results")
-
-        # Extract results. Try a table first, then fall back to list items.
-        rows = page.locator("table tbody tr")
-        row_count = rows.count()
-        log(f"  found {row_count} table rows")
-
-        if row_count > 0:
-            for i in range(row_count):
-                row = rows.nth(i)
-                text = row.inner_text().strip()
-                if not text:
-                    continue
-                link_el = row.locator("a").first
-                href = None
-                try:
-                    href = link_el.get_attribute("href", timeout=1000)
-                except Exception:
-                    pass
-                title = text.split("\n")[0][:300]
-                entries.append({"title": title, "date": "", "link": href or "", "raw": text[:500]})
-        else:
-            # Fallback: list-like cards
-            cards = page.locator("[class*='card'], [class*='list-item'], li")
-            c = min(cards.count(), 100)
-            log(f"  falling back to card/list scan, {c} candidates")
-            for i in range(c):
-                el = cards.nth(i)
-                text = el.inner_text().strip()
-                if len(text) < 15:
-                    continue
-                link_el = el.locator("a").first
-                href = None
-                try:
-                    href = link_el.get_attribute("href", timeout=500)
-                except Exception:
-                    pass
-                entries.append({"title": text[:300], "date": "", "link": href or "", "raw": text[:500]})
+        # The default view lands on Committee Type = EAC (central-level,
+        # not state-specific). Tamil Nadu / Karnataka / Telangana agendas
+        # live under the STATE-level committees instead: SEIAA (State EIA
+        # Authority) and SEAC (State Expert Appraisal Committee) -- see the
+        # org chart on the EC overview page. We try both, since we don't
+        # yet know which one (or both) carries a per-state agenda list.
+        for committee_type in ["SEIAA", "SEAC"]:
+            entries.extend(
+                scrape_committee_type(page, section_label, state_name, committee_type)
+            )
 
     except PWTimeout as e:
         log(f"  TIMEOUT in {section_label}/{state_name}: {e}")
@@ -235,7 +150,108 @@ def scrape_section(page, section_label, state_name):
         log(f"  ERROR in {section_label}/{state_name}: {e}")
         shot(page, f"{section_label}_{state_name}_ERROR")
 
-    log(f"  scraped {len(entries)} entries")
+    log(f"  scraped {len(entries)} entries total for {section_label}/{state_name}")
+    return entries
+
+
+def scrape_committee_type(page, section_label, state_name, committee_type):
+    """
+    Within the already-open Agenda/MOM listing page, select a state-level
+    Committee Type (SEIAA or SEAC), look for a resulting State filter, set
+    it, search, and scrape the results table. Returns a list of entries
+    (possibly empty if this committee type has no state filter or no
+    results).
+    """
+    tag = f"{section_label}_{state_name}_{committee_type}"
+    entries = []
+    try:
+        # Re-select the committee type radio button (exact label text).
+        radio = page.get_by_text(committee_type, exact=True).first
+        radio.click(timeout=10000)
+        page.wait_for_timeout(1200)
+        shot(page, f"{tag}_a_committee_selected")
+
+        # Look for a State filter. Try a native <select> first, then an
+        # Angular Material-style dropdown whose label text is EXACTLY
+        # "State" (never a substring match -- see note above about the
+        # "Accessibility Statement" bug).
+        state_set = False
+
+        selects = page.locator("select")
+        for i in range(selects.count()):
+            sel = selects.nth(i)
+            try:
+                sel.select_option(label=state_name, timeout=2000)
+                state_set = True
+                log(f"  [{committee_type}] set state via native <select> #{i}")
+                break
+            except Exception:
+                continue
+
+        if not state_set:
+            try:
+                dropdown = page.get_by_text(
+                    re.compile(r"^\s*state\s*$", re.I)
+                ).first
+                dropdown.click(timeout=4000)
+                page.wait_for_timeout(500)
+                option = page.get_by_text(state_name, exact=True).first
+                option.click(timeout=4000)
+                state_set = True
+                log(f"  [{committee_type}] set state via dropdown click")
+            except Exception as e:
+                log(f"  [{committee_type}] no State filter found ({e}) -- "
+                    f"this committee type may not support state filtering")
+
+        shot(page, f"{tag}_b_state_selected")
+
+        if not state_set:
+            # No state filter for this committee type -- nothing reliable
+            # to scrape/filter by state here. Bail out for this combo.
+            return entries
+
+        try:
+            search_btn = page.get_by_role(
+                "button", name=re.compile("search|submit|go", re.I)
+            ).first
+            search_btn.click(timeout=5000)
+            page.wait_for_timeout(2000)
+        except Exception:
+            log(f"  [{committee_type}] no explicit search button found")
+
+        page.wait_for_load_state("networkidle", timeout=20000)
+        shot(page, f"{tag}_c_results")
+
+        rows = page.locator("table tbody tr")
+        row_count = rows.count()
+        log(f"  [{committee_type}] found {row_count} table rows")
+
+        for i in range(row_count):
+            row = rows.nth(i)
+            text = row.inner_text().strip()
+            if not text:
+                continue
+            link_el = row.locator("a").first
+            href = None
+            try:
+                href = link_el.get_attribute("href", timeout=1000)
+            except Exception:
+                pass
+            title = text.split("\n")[0][:300]
+            entries.append({
+                "title": f"[{committee_type}] {title}",
+                "date": "",
+                "link": href or "",
+                "raw": text[:500],
+            })
+
+    except PWTimeout as e:
+        log(f"  [{committee_type}] TIMEOUT: {e}")
+        shot(page, f"{tag}_ERROR")
+    except Exception as e:
+        log(f"  [{committee_type}] ERROR: {e}")
+        shot(page, f"{tag}_ERROR")
+
     return entries
 
 
