@@ -165,8 +165,12 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
     tag = f"{section_label}_{state_name}_{committee_type}"
     entries = []
     try:
-        # Re-select the committee type radio button (exact label text).
-        radio = page.get_by_text(committee_type, exact=True).first
+        # Re-select the committee type radio button. IMPORTANT: plain text
+        # matching is ambiguous here -- the sidebar also has a "SEIAA" link
+        # under Notification & Order, and a loose text click grabbed that
+        # instead of the actual radio button. Scope to role=radio so we only
+        # ever hit the real form control.
+        radio = page.get_by_role("radio", name=committee_type, exact=True).first
         radio.click(timeout=10000)
         page.wait_for_timeout(1200)
         shot(page, f"{tag}_a_committee_selected")
@@ -175,18 +179,28 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
         # Angular Material-style dropdown whose label text is EXACTLY
         # "State" (never a substring match -- see note above about the
         # "Accessibility Statement" bug).
+        #
+        # The results table displays state names in ALL CAPS (e.g.
+        # "MAHARASHTRA", "UTTAR PRADESH"), so the <select> options are very
+        # likely uppercase too even though our STATES list is Title Case.
+        # Try a few casings rather than assuming one.
         state_set = False
+        state_label_variants = [state_name, state_name.upper(), state_name.title()]
 
         selects = page.locator("select")
         for i in range(selects.count()):
             sel = selects.nth(i)
-            try:
-                sel.select_option(label=state_name, timeout=2000)
-                state_set = True
-                log(f"  [{committee_type}] set state via native <select> #{i}")
+            for variant in state_label_variants:
+                try:
+                    sel.select_option(label=variant, timeout=2000)
+                    state_set = True
+                    log(f"  [{committee_type}] set state via native <select> #{i} "
+                        f"(label '{variant}')")
+                    break
+                except Exception:
+                    continue
+            if state_set:
                 break
-            except Exception:
-                continue
 
         if not state_set:
             try:
@@ -195,10 +209,16 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
                 ).first
                 dropdown.click(timeout=4000)
                 page.wait_for_timeout(500)
-                option = page.get_by_text(state_name, exact=True).first
-                option.click(timeout=4000)
-                state_set = True
-                log(f"  [{committee_type}] set state via dropdown click")
+                for variant in state_label_variants:
+                    try:
+                        option = page.get_by_text(variant, exact=True).first
+                        option.click(timeout=2000)
+                        state_set = True
+                        log(f"  [{committee_type}] set state via dropdown click "
+                            f"('{variant}')")
+                        break
+                    except Exception:
+                        continue
             except Exception as e:
                 log(f"  [{committee_type}] no State filter found ({e}) -- "
                     f"this committee type may not support state filtering")
@@ -220,6 +240,10 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
             log(f"  [{committee_type}] no explicit search button found")
 
         page.wait_for_load_state("networkidle", timeout=20000)
+        try:
+            page.wait_for_selector("table tbody tr", timeout=15000)
+        except PWTimeout:
+            log(f"  [{committee_type}] no table rows appeared within timeout")
         shot(page, f"{tag}_c_results")
 
         rows = page.locator("table tbody tr")
