@@ -258,23 +258,58 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
 
         shot(page, f"{tag}_b3_dates_filled")
 
+        # Capture the first row's text now so we can tell, after clicking
+        # Search, whether the table content actually changed at all.
+        try:
+            row0_before = page.locator("table tbody tr").first.inner_text().strip()
+        except Exception:
+            row0_before = ""
+        log(f"  [{committee_type}] first row BEFORE search click: {row0_before[:80]!r}")
+
         try:
             search_buttons = page.get_by_role(
                 "button", name=re.compile(r"^\s*search\s*$", re.I)
             )
             count = search_buttons.count()
             log(f"  [{committee_type}] found {count} 'Search' button(s) on page")
-            # The page has TWO "Search" buttons: a site-wide search in the
-            # top navbar, and the actual filter's Search button below the
-            # State dropdown. The navbar one comes first in the DOM, so
-            # .first was silently clicking the wrong button and the state
-            # filter never actually applied (state dropdown showed "TAMIL
-            # NADU" but results stayed unfiltered). Use .last instead.
+            # Log each candidate's position so we can tell which one is
+            # actually the filter's Search button vs. the top-nav one.
+            for bi in range(count):
+                try:
+                    box = search_buttons.nth(bi).bounding_box()
+                    log(f"    Search button #{bi}: bounding_box={box}")
+                except Exception as e:
+                    log(f"    Search button #{bi}: bounding_box failed ({e})")
+
+            # The page has (at least) two "Search" buttons: a site-wide
+            # search in the top navbar, and the actual filter's Search
+            # button below the State dropdown. Use .last, which should be
+            # further down the page (higher y-coordinate) than the navbar
+            # one.
             search_btn = search_buttons.last
+            search_btn.scroll_into_view_if_needed(timeout=5000)
             search_btn.click(timeout=5000)
             page.wait_for_timeout(500)
             shot(page, f"{tag}_b2_after_search_click")
             page.wait_for_timeout(1500)
+
+            try:
+                row0_after = page.locator("table tbody tr").first.inner_text().strip()
+            except Exception:
+                row0_after = ""
+            log(f"  [{committee_type}] first row AFTER search click:  {row0_after[:80]!r}")
+
+            if row0_after == row0_before:
+                log(f"  [{committee_type}] table content DID NOT CHANGE after "
+                    f"click -- trying a JS-dispatched click as a fallback")
+                try:
+                    search_btn.evaluate("el => el.click()")
+                    page.wait_for_timeout(2000)
+                    row0_retry = page.locator("table tbody tr").first.inner_text().strip()
+                    log(f"  [{committee_type}] first row AFTER JS click:     "
+                        f"{row0_retry[:80]!r}")
+                except Exception as e:
+                    log(f"  [{committee_type}] JS-dispatched click failed: {e}")
         except Exception as e:
             log(f"  [{committee_type}] search button click failed: {e}")
 
