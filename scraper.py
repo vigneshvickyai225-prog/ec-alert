@@ -231,13 +231,24 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
             return entries
 
         try:
-            search_btn = page.get_by_role(
-                "button", name=re.compile("search|submit|go", re.I)
-            ).first
+            search_buttons = page.get_by_role(
+                "button", name=re.compile(r"^\s*search\s*$", re.I)
+            )
+            count = search_buttons.count()
+            log(f"  [{committee_type}] found {count} 'Search' button(s) on page")
+            # The page has TWO "Search" buttons: a site-wide search in the
+            # top navbar, and the actual filter's Search button below the
+            # State dropdown. The navbar one comes first in the DOM, so
+            # .first was silently clicking the wrong button and the state
+            # filter never actually applied (state dropdown showed "TAMIL
+            # NADU" but results stayed unfiltered). Use .last instead.
+            search_btn = search_buttons.last
             search_btn.click(timeout=5000)
-            page.wait_for_timeout(2000)
-        except Exception:
-            log(f"  [{committee_type}] no explicit search button found")
+            page.wait_for_timeout(500)
+            shot(page, f"{tag}_b2_after_search_click")
+            page.wait_for_timeout(1500)
+        except Exception as e:
+            log(f"  [{committee_type}] search button click failed: {e}")
 
         page.wait_for_load_state("networkidle", timeout=20000)
         try:
