@@ -121,12 +121,26 @@ def scrape_section(page, section_label, state_name):
         # Open the sidebar section (Agenda or MOM)
         section_locator = page.get_by_text(section_label, exact=True).first
         section_locator.click(timeout=15000)
+        page.wait_for_timeout(1000)
+        shot(page, f"{section_label}_{state_name}_01a_submenu_opened")
+
+        # The sidebar section expands into a submenu with version links
+        # ("PARIVESH 2.0" / "PARIVESH 1.0"). We want the current version.
+        version_link = page.get_by_text("PARIVESH 2.0", exact=True).first
+        version_link.click(timeout=15000)
+        page.wait_for_load_state("networkidle", timeout=30000)
         page.wait_for_timeout(1500)
         shot(page, f"{section_label}_{state_name}_01_section_opened")
 
         # Try to find a State dropdown/select and choose our state.
         # Common patterns: a <select>, or an Angular Material mat-select
         # (a clickable div that opens a floating option panel).
+        #
+        # IMPORTANT: text matching must be an EXACT/whole-string match for
+        # "State" -- a earlier version used a loose substring regex and it
+        # matched "Accessibility Statement" in the site footer instead,
+        # navigating the browser to the wrong page entirely. Never loosen
+        # this back to a substring match.
         state_set = False
 
         # Attempt 1: native <select> containing "State" nearby
@@ -141,11 +155,14 @@ def scrape_section(page, section_label, state_name):
             except Exception:
                 continue
 
-        # Attempt 2: mat-select style dropdown -- click something with
-        # placeholder/label text "State", then click the option text.
+        # Attempt 2: mat-select style dropdown -- click the label/placeholder
+        # element whose *entire* text is exactly "State" (case-insensitive,
+        # allowing surrounding whitespace only), then click the option text.
         if not state_set:
             try:
-                dropdown = page.get_by_text(re.compile("state", re.I)).first
+                dropdown = page.get_by_text(
+                    re.compile(r"^\s*state\s*$", re.I)
+                ).first
                 dropdown.click(timeout=5000)
                 page.wait_for_timeout(500)
                 option = page.get_by_text(state_name, exact=True).first
@@ -154,6 +171,10 @@ def scrape_section(page, section_label, state_name):
                 log("  set state via mat-select-style dropdown")
             except Exception as e:
                 log(f"  could not set state dropdown: {e}")
+
+        # Sanity check: log the URL so we can spot in the Actions log if a
+        # stray click ever lands somewhere unexpected again.
+        log(f"  current URL: {page.url}")
 
         shot(page, f"{section_label}_{state_name}_02_state_selected")
 
