@@ -1,0 +1,53 @@
+name: PARIVESH EC Monitor
+
+on:
+  schedule:
+    # Every 20 minutes. GitHub may delay this slightly under load --
+    # that's normal and fine for this use case.
+    - cron: "*/20 * * * *"
+  workflow_dispatch: {}   # lets you trigger a manual run from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run scraper
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scraper.py
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots-${{ github.run_number }}
+          path: debug_screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Commit updated seen_ids.json
+        if: always()
+        run: |
+          git config user.name "parivesh-monitor-bot"
+          git config user.email "actions@github.com"
+          git add seen_ids.json
+          git diff --cached --quiet || git commit -m "Update seen entries [skip ci]"
+          git push
