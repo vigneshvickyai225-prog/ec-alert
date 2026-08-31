@@ -27,12 +27,18 @@ import sys
 import time
 import argparse
 from pathlib import Path
+from datetime import date, timedelta
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 import requests
 
 BASE_URL = "https://parivesh.nic.in/#/ec"
 STATES = ["Tamil Nadu", "Karnataka", "Telangana"]
+# Wide date range for the From Date / To Date filter fields -- these may
+# be required for the search to actually filter (rather than silently
+# falling back to the unfiltered default list, which is what we observed).
+SEARCH_FROM_DATE = date(2015, 1, 1)
+SEARCH_TO_DATE = date.today() + timedelta(days=1)
 SECTIONS = ["Agenda", "MOM"]  # sidebar labels seen in the screenshot
 
 SEEN_FILE = Path(__file__).parent / "seen_ids.json"
@@ -230,6 +236,28 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
             # to scrape/filter by state here. Bail out for this combo.
             return entries
 
+        # Fill From Date / To Date with a wide range. These may be
+        # required for the backend to actually apply the state filter --
+        # earlier runs showed the State dropdown correctly set to e.g.
+        # "TAMIL NADU" but the results table stayed completely unfiltered
+        # (same row content and same huge page count as with no filter at
+        # all), which points to a required-field fallback rather than a
+        # click-target problem.
+        try:
+            date_inputs = page.locator("input[type='date']")
+            if date_inputs.count() >= 2:
+                date_inputs.nth(0).fill(SEARCH_FROM_DATE.isoformat())
+                date_inputs.nth(1).fill(SEARCH_TO_DATE.isoformat())
+                log(f"  [{committee_type}] filled date range "
+                    f"{SEARCH_FROM_DATE} to {SEARCH_TO_DATE}")
+            else:
+                log(f"  [{committee_type}] expected 2 date inputs, found "
+                    f"{date_inputs.count()}")
+        except Exception as e:
+            log(f"  [{committee_type}] could not fill date range: {e}")
+
+        shot(page, f"{tag}_b3_dates_filled")
+
         try:
             search_buttons = page.get_by_role(
                 "button", name=re.compile(r"^\s*search\s*$", re.I)
@@ -261,11 +289,13 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
         row_count = rows.count()
         log(f"  [{committee_type}] found {row_count} table rows")
 
+        row_texts = []
         for i in range(row_count):
             row = rows.nth(i)
             text = row.inner_text().strip()
             if not text:
                 continue
+            row_texts.append(text)
             link_el = row.locator("a").first
             href = None
             try:
@@ -279,6 +309,17 @@ def scrape_committee_type(page, section_label, state_name, committee_type):
                 "link": href or "",
                 "raw": text[:500],
             })
+
+        # Sanity log: pull out the State column value (2nd tab-separated
+        # field in each row's text) so we can confirm filtering worked
+        # just by reading the Actions log, without needing new screenshots
+        # each round.
+        states_seen = set()
+        for t in row_texts:
+            parts = t.split("\n")
+            if len(parts) >= 2:
+                states_seen.add(parts[1].strip())
+        log(f"  [{committee_type}] distinct State values in results: {sorted(states_seen)}")
 
     except PWTimeout as e:
         log(f"  [{committee_type}] TIMEOUT: {e}")
