@@ -80,6 +80,23 @@ def click_first_visible(locator, timeout=15000, description="element"):
     )
 
 
+SECTION_ERRORS = 0  # count of section/state combos that failed outright
+
+
+def goto_with_retry(page, url, attempts=3):
+    """Open a page, retrying with a growing pause if the site refuses us."""
+    for i in range(1, attempts + 1):
+        try:
+            page.goto(url, wait_until="networkidle", timeout=45000)
+            return
+        except Exception as e:
+            if i == attempts:
+                raise
+            log(f"  could not open site (attempt {i}/{attempts}): {str(e)[:80]} "
+                f"-- retrying")
+            time.sleep(5 * i)
+
+
 def shot(page, name, force=False):
     """
     Save a screenshot. On a normal run this is a no-op unless force=True
@@ -165,7 +182,7 @@ def scrape_section(page, section_label, state_name):
     entries = []
 
     try:
-        page.goto(BASE_URL, wait_until="networkidle", timeout=45000)
+        goto_with_retry(page, BASE_URL)
         shot(page, f"{section_label}_{state_name}_00_loaded")
 
         # Open the sidebar section (Agenda or MOM)
@@ -192,9 +209,12 @@ def scrape_section(page, section_label, state_name):
             )
 
     except PWTimeout as e:
+        global SECTION_ERRORS
+        SECTION_ERRORS += 1
         log(f"  TIMEOUT in {section_label}/{state_name}: {e}")
         shot(page, f"{section_label}_{state_name}_ERROR", force=True)
     except Exception as e:
+        SECTION_ERRORS += 1
         log(f"  ERROR in {section_label}/{state_name}: {e}")
         shot(page, f"{section_label}_{state_name}_ERROR", force=True)
 
@@ -386,6 +406,13 @@ def main():
                         new_alerts.append((section, state, key, eid, entry))
 
         browser.close()
+
+    total_combos = len(SECTIONS) * len(STATES)
+    if SECTION_ERRORS >= total_combos:
+        log("ALL sections failed -- PARIVESH looks unreachable from this "
+            "runner (down, or blocking GitHub's servers). Failing the run "
+            "so it shows red instead of a false green.")
+        sys.exit(1)
 
     if not new_alerts:
         log("No new entries found.")
