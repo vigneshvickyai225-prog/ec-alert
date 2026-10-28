@@ -29,9 +29,15 @@ concurrency:
   group: parivesh-ec-monitor
   cancel-in-progress: false
 
+env:
+  # Opts the standard actions into Node 24 now (silences the Node 20 warning).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   monitor:
-    runs-on: ubuntu-latest
+    # Pinned instead of ubuntu-latest: "latest" is migrating to Ubuntu 26,
+    # and Playwright's browser dependencies may not install there yet.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout repo
