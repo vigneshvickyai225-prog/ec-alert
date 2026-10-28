@@ -2,13 +2,32 @@ name: PARIVESH EC Monitor
 
 on:
   schedule:
-    # Every 20 minutes. GitHub may delay this slightly under load --
-    # that's normal and fine for this use case.
-    - cron: "*/20 * * * *"
+    # Requested cadence: every 1 minute. NOTE (please read): GitHub
+    # Actions does NOT guarantee this. GitHub's own docs state scheduled
+    # workflows can be delayed under load, and in practice cron schedules
+    # tighter than ~5 minutes are often throttled/skipped by GitHub
+    # itself. Expect actual runs closer to every 2-5 minutes, not exactly
+    # every 1 minute, especially since each run currently takes a few
+    # minutes to complete.
+    #
+    # Quiet hours: OFF from 11:00 PM to 7:00 AM IST. GitHub Actions cron
+    # is UTC-only, and IST = UTC+5:30, so that's OFF from 17:30-01:30 UTC,
+    # i.e. ACTIVE 01:30-17:30 UTC. Split into 3 lines to hit the exact
+    # half-hour boundary:
+    - cron: "30-59 1 * * *"   # 01:30-01:59 UTC = 07:00-07:29 IST
+    - cron: "*     2-16 * * *"  # 02:00-16:59 UTC = 07:30-22:29 IST
+    - cron: "0-30  17 * * *"  # 17:00-17:30 UTC = 22:30-23:00 IST
   workflow_dispatch: {}   # lets you trigger a manual run from the Actions tab
 
 permissions:
   contents: write
+
+# Prevents overlapping runs from colliding when pushing seen_ids.json --
+# with a ~1 run/minute schedule but each run taking a few minutes, runs
+# WILL queue up. This makes them run one-at-a-time instead of erroring.
+concurrency:
+  group: parivesh-ec-monitor
+  cancel-in-progress: false
 
 jobs:
   monitor:
@@ -49,5 +68,8 @@ jobs:
           git config user.name "parivesh-monitor-bot"
           git config user.email "actions@github.com"
           git add seen_ids.json
-          git diff --cached --quiet || git commit -m "Update seen entries [skip ci]"
+          git diff --cached --quiet && exit 0
+          git commit -m "Update seen entries [skip ci]"
+          git pull --rebase
           git push
+
